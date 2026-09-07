@@ -1,0 +1,9 @@
+# Archivos de macOS
+.DS_Store
+
+
+# Configuracion y contexto local del asistente
+/.opencode/
+/AGENTS.md
+/dominio.md
+

@@ -1,0 +1,1343 @@
+\documentclass[11pt,a4paper]{article}
+
+% ------------------------------------------------------------
+% Encoding, language and typography
+% ------------------------------------------------------------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-nodecimaldot]{babel}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{csquotes}
+
+% ------------------------------------------------------------
+% Layout
+% ------------------------------------------------------------
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage{setspace}
+\setstretch{1.08}
+\usepackage{parskip}
+\setlength{\parindent}{0pt}
+\usepackage{enumitem}
+\setlist[itemize]{topsep=3pt,itemsep=2pt,parsep=0pt}
+\setlist[enumerate]{topsep=3pt,itemsep=2pt,parsep=0pt}
+
+% ------------------------------------------------------------
+% Colors and links
+% ------------------------------------------------------------
+\usepackage{xcolor}
+\definecolor{Primary}{HTML}{17324D}
+\definecolor{Secondary}{HTML}{2F6B8A}
+\definecolor{LightBlue}{HTML}{EEF5F9}
+\definecolor{LightGray}{HTML}{F4F6F8}
+\definecolor{DarkGray}{HTML}{3F4850}
+\definecolor{CodeBg}{HTML}{F7F7F7}
+\definecolor{CodeFrame}{HTML}{D9DEE3}
+\definecolor{Good}{HTML}{2E7D32}
+\definecolor{Warn}{HTML}{B26A00}
+\definecolor{Bad}{HTML}{B71C1C}
+
+\usepackage[colorlinks=true,linkcolor=Primary,urlcolor=Secondary,citecolor=Secondary]{hyperref}
+
+% ------------------------------------------------------------
+% Tables and boxes
+% ------------------------------------------------------------
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{multirow}
+\usepackage{colortbl}
+\usepackage[most]{tcolorbox}
+
+\newtcolorbox{conceptbox}[1]{
+  colback=LightBlue,
+  colframe=Secondary,
+  title=\textbf{#1},
+  sharp corners,
+  boxrule=0.6pt,
+  left=7pt,right=7pt,top=6pt,bottom=6pt
+}
+
+\newtcolorbox{engineeringbox}[1]{
+  colback=LightGray,
+  colframe=DarkGray,
+  title=\textbf{#1},
+  sharp corners,
+  boxrule=0.6pt,
+  left=7pt,right=7pt,top=6pt,bottom=6pt
+}
+
+% ------------------------------------------------------------
+% Code listings
+% ------------------------------------------------------------
+\usepackage{listings}
+\lstdefinelanguage{Go}{
+  keywords={break,default,func,interface,select,case,defer,go,map,struct,chan,else,goto,package,switch,const,fallthrough,if,range,type,continue,for,import,return,var},
+  sensitive=true,
+  comment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]"
+}
+
+\lstset{
+  backgroundcolor=\color{CodeBg},
+  frame=single,
+  rulecolor=\color{CodeFrame},
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{Primary}\bfseries,
+  commentstyle=\color{DarkGray}\itshape,
+  stringstyle=\color{Secondary},
+  showstringspaces=false,
+  breaklines=true,
+  columns=fullflexible,
+  tabsize=4,
+  numbers=left,
+  numberstyle=\tiny\color{DarkGray},
+  xleftmargin=1em,
+  framexleftmargin=0.5em,
+  captionpos=b
+}
+
+% ------------------------------------------------------------
+% Diagrams
+% ------------------------------------------------------------
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,calc,backgrounds,babel}
+\tikzset{
+  box/.style={draw=Primary,rounded corners,thick,align=center,minimum height=10mm,minimum width=28mm,fill=LightBlue},
+  smallbox/.style={draw=DarkGray,rounded corners,align=center,minimum height=8mm,minimum width=23mm,fill=LightGray},
+  datastore/.style={draw=Secondary,cylinder,shape border rotate=90,aspect=0.25,align=center,minimum height=11mm,minimum width=22mm,fill=LightBlue},
+  arrow/.style={-{Latex[length=2.5mm]},thick,draw=DarkGray},
+  dashedarrow/.style={-{Latex[length=2.5mm]},thick,dashed,draw=DarkGray}
+}
+
+% ------------------------------------------------------------
+% Utility commands
+% ------------------------------------------------------------
+\newcommand{\project}{\texttt{ai-optimized-gateway-proxy}}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\good}{\textcolor{Good}{\textbf{Ventaja}}}
+\newcommand{\warn}{\textcolor{Warn}{\textbf{Atención}}}
+\newcommand{\bad}{\textcolor{Bad}{\textbf{Riesgo}}}
+
+\title{\vspace{-1.2cm}\textbf{AI-Optimized Gateway Proxy}\\[0.25cm]
+\large Diseño, fundamentos de concurrencia y arquitectura de un Gateway de IA de alta disponibilidad en Go}
+\author{Documento técnico de arquitectura y aprendizaje}
+\date{Septiembre de 2026}
+
+\begin{document}
+\maketitle
+\vspace{-0.4cm}
+
+\begin{abstract}
+Este documento define, desde primeros principios, los conceptos, decisiones arquitectónicas y mecanismos de bajo nivel necesarios para construir \project{}, un gateway concurrente y de alto rendimiento para enrutar peticiones hacia modelos de lenguaje locales y proveedores externos. El objetivo no es únicamente producir un servicio funcional, sino comprender por qué determinadas decisiones de concurrencia, memoria, red, tolerancia a fallos, caching y observabilidad son correctas o incorrectas bajo carga real. El sistema final combinará un backend en Go, un dashboard en React + TypeScript, balanceo de carga, health checking, failover, rate limiting, caché LRU concurrente, métricas en tiempo real y herramientas de profiling y benchmarking.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% ============================================================
+\section{Introducción y objetivos}
+% ============================================================
+
+\project{} se plantea como un proyecto de portafolio de nivel Mid/Senior con dos objetivos simultáneos:
+
+\begin{enumerate}
+  \item Construir un sistema útil: un gateway capaz de recibir tráfico de aplicaciones cliente, aplicar políticas de admisión, seleccionar un proveedor LLM, reutilizar respuestas cacheables, degradarse de forma controlada ante fallos y exponer telemetría en tiempo real.
+  \item Desarrollar criterio de ingeniería: comprender cómo interactúan Go, el scheduler, el sistema operativo, la memoria, las conexiones TCP, las colas, los locks, las cachés y los proveedores externos bajo concurrencia.
+\end{enumerate}
+
+El proyecto prioriza una idea esencial: \textbf{primero corrección, después concurrencia, finalmente rendimiento}. Optimizar prematuramente un diseño incorrecto crea sistemas rápidos en condiciones ideales y frágiles bajo condiciones reales.
+
+\begin{conceptbox}{Principio rector}
+Un sistema de alto rendimiento no es el que procesa una request muy rápido de forma aislada, sino el que mantiene latencia, throughput, estabilidad y uso de recursos dentro de límites razonables cuando aumenta la carga o cuando partes de la infraestructura fallan.
+\end{conceptbox}
+
+% ============================================================
+\section{Arquitectura objetivo del sistema}
+% ============================================================
+
+El gateway actuará como una capa de control entre los clientes y múltiples proveedores de inferencia. Su responsabilidad excede la de un reverse proxy convencional: decidirá \emph{si} una request puede entrar, \emph{cómo} se procesa, \emph{qué proveedor} debe atenderla, \emph{cuándo} debe reintentarse, \emph{si} puede resolverse desde caché y \emph{qué métricas} deben generarse.
+
+\subsection{Vista de alto nivel}
+
+\begin{center}
+\begin{tikzpicture}[node distance=12mm and 15mm]
+  \node[box] (clients) {Clientes\\SDK / Web / CLI};
+  \node[box, right=of clients] (gateway) {Go AI Gateway\\HTTP API};
+  \node[smallbox, above right=8mm and 14mm of gateway] (rate) {Rate Limiter};
+  \node[smallbox, right=of gateway] (router) {Router /\\Load Balancer};
+  \node[smallbox, below right=8mm and 14mm of gateway] (cache) {LRU Cache};
+  \node[box, above right=8mm and 15mm of router] (ollama) {Ollama / Llama\\Local};
+  \node[box, below right=8mm and 15mm of router] (openai) {Proveedor externo\\OpenAI};
+  \node[smallbox, below=of gateway] (metrics) {Metrics Bus};
+  \node[box, below right=of metrics] (dashboard) {React Dashboard\\SSE / WebSocket};
+
+  \draw[arrow] (clients) -- (gateway);
+  \draw[arrow] (gateway) -- (router);
+  \draw[arrow] (router) -- (ollama);
+  \draw[arrow] (router) -- (openai);
+  \draw[dashedarrow] (gateway) -- (rate);
+  \draw[dashedarrow] (gateway) -- (cache);
+  \draw[arrow] (gateway) -- (metrics);
+  \draw[arrow] (metrics) -- (dashboard);
+\end{tikzpicture}
+\end{center}
+
+\subsection{Responsabilidades principales}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{>{\bfseries}p{3.2cm} X X}
+\toprule
+Componente & Responsabilidad & Riesgo principal \\
+\midrule
+HTTP Server & Aceptar conexiones y modelar el ciclo request/response & Timeouts incorrectos, cuerpos sin límite, fugas de goroutines \\
+Rate Limiter & Controlar frecuencia y ráfagas & Contención y crecimiento ilimitado de buckets \\
+Worker Pool / Admission & Limitar trabajo en vuelo & Colas sin límite y aumento explosivo de latencia \\
+Cache LRU & Reutilizar respuestas y reducir coste & Locks calientes, memoria no acotada, invalidación incorrecta \\
+Router & Seleccionar proveedor & Distribución injusta o routing sin conocimiento de salud \\
+Health Checker & Detectar estado de backends & Flapping, falsos positivos y falsos negativos \\
+Failover / Retry & Recuperarse de fallos parciales & Retry storms y duplicación de trabajo \\
+Metrics Bus & Desacoplar generación y consumo de métricas & Slow consumers y backpressure \\
+Dashboard & Exponer estado operativo & Re-renderizado excesivo y pérdida de eventos \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+% ============================================================
+\section{Modelo de ejecución de Go}
+% ============================================================
+
+\subsection{Concurrencia frente a paralelismo}
+
+\textbf{Concurrencia} significa estructurar un programa para que múltiples tareas puedan progresar de forma solapada. \textbf{Paralelismo} significa que varias tareas ejecutan literalmente al mismo tiempo en diferentes cores.
+
+Un gateway de IA es predominantemente I/O-bound: una goroutine puede pasar gran parte de su vida esperando red, TLS, DNS, un socket o la respuesta del modelo. En ese escenario, Go puede mantener muchas requests en progreso con un número relativamente pequeño de threads del sistema operativo.
+
+\subsection{Goroutines, threads y scheduler G-M-P}
+
+Go separa tres conceptos internos:
+
+\begin{itemize}
+  \item \textbf{G (Goroutine):} unidad lógica de ejecución gestionada por el runtime de Go. Una goroutine no es un thread del sistema operativo.
+  \item \textbf{M (Machine):} thread real del sistema operativo sobre el que termina ejecutándose código Go.
+  \item \textbf{P (Processor):} contexto lógico del scheduler de Go. Mantiene los recursos necesarios para ejecutar goroutines y se asocia temporalmente con un M. Un M necesita un P para ejecutar código Go.
+\end{itemize}
+
+\begin{figure}[htbp]
+\centering
+\shorthandoff{<>}
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  x=1cm,y=1cm,
+  font=\small,
+  gnode/.style={draw=green!50!black, fill=green!8, rounded corners=2pt, minimum width=1.18cm, minimum height=.62cm, align=center, line width=.65pt, font=\small},
+  pnode/.style={draw=blue!65!black, fill=blue!7, rounded corners=3pt, minimum width=2.05cm, minimum height=.72cm, align=center, line width=.8pt, font=\small},
+  qnode/.style={draw=blue!45!black, fill=blue!2, rounded corners=2pt, minimum width=2.05cm, minimum height=.48cm, align=center, font=\tiny},
+  mnode/.style={draw=violet!65!black, fill=violet!7, rounded corners=3pt, minimum width=2.05cm, minimum height=.90cm, align=center, line width=.7pt, font=\small},
+  layer/.style={rounded corners=5pt, dashed, line width=.65pt},
+  sched/.style={latex-latex, dashed, line width=.65pt, draw=black!70},
+  bind/.style={latex-latex, line width=.8pt, draw=black!75},
+  kernelarrow/.style={->, >=Latex, line width=.8pt, draw=black!75},
+  note/.style={rounded corners=4pt, minimum width=4.15cm, text width=3.75cm, align=left, inner sep=6pt, font=\tiny}
+]
+  % --- G layer --------------------------------------------------------------
+  \draw[layer, draw=green!50!black, fill=green!2] (0,4.25) rectangle (10.8,5.95);
+  \node[anchor=west, align=left] at (.28,5.12) {\textbf{\normalsize G}\\[-1pt]\textbf{(Goroutines)}\\[-1pt]{\tiny Unidades lógicas}\\[-2pt]{\tiny de ejecución}};
+
+  \node[gnode] (g1) at (3.30,5.16) {G1};
+  \node[gnode] (g2) at (4.60,5.16) {G2};
+  \node[gnode] (g3) at (5.90,5.16) {G3};
+  \node[gnode] (g4) at (7.20,5.16) {G4};
+  \node[gnode] (g5) at (8.50,5.16) {G5};
+  \node[gnode] (g6) at (9.80,5.16) {G6};
+  \node at (10.48,5.16) {$\cdots$};
+
+  % --- P layer --------------------------------------------------------------
+  \draw[layer, draw=blue!60!black, fill=blue!2] (0,2.24) rectangle (10.8,4.00);
+  \node[anchor=west, align=left] at (.28,3.10) {\textbf{\normalsize P}\\[-1pt]\textbf{(Processors)}\\[-1pt]{\tiny Contextos de ejecución}\\[-2pt]{\tiny del runtime}};
+
+  \node[pnode] (p1) at (3.85,3.35) {P1};
+  \node[pnode] (p2) at (6.45,3.35) {P2};
+  \node[pnode] (p3) at (9.05,3.35) {P3};
+  \node[qnode] (q1) at (3.85,2.72) {Cola local de G};
+  \node[qnode] (q2) at (6.45,2.72) {Cola local de G};
+  \node[qnode] (q3) at (9.05,2.72) {Cola local de G};
+  \draw[-, draw=blue!45!black] (p1.south) -- (q1.north);
+  \draw[-, draw=blue!45!black] (p2.south) -- (q2.north);
+  \draw[-, draw=blue!45!black] (p3.south) -- (q3.north);
+  \node at (10.48,3.35) {$\cdots$};
+
+  % --- M layer --------------------------------------------------------------
+  \draw[layer, draw=violet!60!black, fill=violet!2] (0,.30) rectangle (10.8,1.98);
+  \node[anchor=west, align=left] at (.28,1.13) {\textbf{\normalsize M}\\[-1pt]\textbf{(Machines)}\\[-1pt]{\tiny Threads del sistema}\\[-2pt]{\tiny operativo}};
+
+  \node[mnode] (m1) at (3.85,1.16) {M1\\OS Thread};
+  \node[mnode] (m2) at (6.45,1.16) {M2\\OS Thread};
+  \node[mnode] (m3) at (9.05,1.16) {M3\\OS Thread};
+  \node at (10.48,1.16) {$\cdots$};
+
+  % --- Scheduling and dynamic P-M binding ----------------------------------
+  \draw[sched] (g1.south) -- (p1.north west);
+  \draw[sched] (g2.south) -- (p1.north east);
+  \draw[sched] (g3.south) -- (p2.north west);
+  \draw[sched] (g4.south) -- (p2.north east);
+  \draw[sched] (g5.south) -- (p3.north west);
+  \draw[sched] (g6.south) -- (p3.north east);
+
+  \draw[bind] (q1.south) -- (m1.north);
+  \draw[bind] (q2.south) -- (m2.north);
+  \draw[bind] (q3.south) -- (m3.north);
+
+  % --- Kernel ---------------------------------------------------------------
+  \node[draw=red!65!black, fill=red!7, rounded corners=3pt,
+        minimum width=9.55cm, minimum height=.68cm, align=center, font=\normalsize]
+        (kernel) at (5.55,-.62) {Sistema Operativo / Kernel};
+  \draw[kernelarrow] (m1.south) -- (kernel.north -| m1);
+  \draw[kernelarrow] (m2.south) -- (kernel.north -| m2);
+  \draw[kernelarrow] (m3.south) -- (kernel.north -| m3);
+
+  % --- Explanatory callouts -------------------------------------------------
+  \node[note, draw=green!18!black, fill=green!5, anchor=north west] at (11.18,5.95) {
+    \textbf{Goroutines (G)}\\[2pt]
+    Pueden existir miles. Son unidades lógicas ligeras y pueden estar \emph{runnable}, esperando o ejecutándose. No son threads del SO.};
+
+  \node[note, draw=blue!18!black, fill=blue!5, anchor=north west] at (11.18,3.98) {
+    \textbf{Processors (P)}\\[2pt]
+    $\#P$ está gobernado por \code{GOMAXPROCS}. Cada P aporta recursos del scheduler y una cola local. P limita el paralelismo de Go.};
+
+  \node[note, draw=violet!18!black, fill=violet!5, anchor=north west] at (11.18,1.96) {
+    \textbf{Machines (M)}\\[2pt]
+    Son threads reales del SO. La asociación P--M es dinámica; si una M se bloquea en una syscall, el runtime puede reasignar su P.};
+\end{tikzpicture}%
+}
+\caption{Modelo de ejecución G--M--P del runtime de Go. Las goroutines se multiplexan sobre contextos P, que se asocian dinámicamente con threads M del sistema operativo.}
+\label{fig:gmp-model}
+\shorthandon{<>}
+\end{figure}
+
+\begin{center}
+\small
+\renewcommand{\arraystretch}{1.18}
+\begin{tabularx}{0.98\textwidth}{@{}>{\bfseries}p{2.0cm} X X@{}}
+\toprule
+Entidad & Qué representa & Idea clave \\
+\midrule
+G (Goroutine) & Unidad lógica de ejecución gestionada por el runtime; ligera y con stack dinámico. & Se multiplexa sobre P; no equivale a un OS thread. Puede estar \emph{runnable}, esperando o bloqueada por I/O/sincronización. \\
+P (Processor) & Contexto lógico del runtime que contiene recursos para ejecutar código Go: cola local, cachés y estado del scheduler. & El número de P limita el paralelismo de código Go y está gobernado por \code{GOMAXPROCS}. \\
+M (Machine) & Thread real del sistema operativo utilizado por el runtime para ejecutar código Go y realizar operaciones que llegan al kernel. & Ejecuta goroutines cuando está asociado a un P. La asociación P--M es dinámica y puede cambiar ante bloqueos o decisiones del scheduler. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+El modelo no debe interpretarse como una asociación permanente \(G \rightarrow P \rightarrow M\). Las goroutines pueden cambiar de P a lo largo del tiempo y los P pueden asociarse a distintos M. Si un M queda bloqueado en una syscall, el runtime puede desacoplar su P y entregárselo a otro M para seguir ejecutando goroutines. Esta multiplexación es una de las razones por las que Go puede mantener un número de goroutines muy superior al número de threads activos del sistema operativo.
+
+\code{GOMAXPROCS} controla cuántos P pueden ejecutar código Go simultáneamente. Esto no limita el número de goroutines existentes; limita el paralelismo de ejecución de Go sobre CPU.
+
+\begin{engineeringbox}{Aplicación al gateway}
+Crear una goroutine por request no es necesariamente peligroso por el coste de la goroutine en sí. El peligro real está en los recursos transitivos: memoria de buffers, conexiones upstream, colas, objetos de request, respuestas y trabajo que se acumula cuando el backend LLM procesa más lento de lo que llega el tráfico.
+\end{engineeringbox}
+
+\subsection{Stacks, heap y escape analysis}
+
+Cada goroutine comienza con un stack pequeño que puede crecer dinámicamente. El compilador intenta mantener variables locales en stack cuando su vida está acotada. Si una referencia debe sobrevivir al frame actual, o si el compilador no puede demostrar que es segura en stack, el valor puede \emph{escapar} al heap.
+
+El heap es gestionado por el garbage collector. Por tanto, en rutas calientes del gateway, muchas asignaciones efímeras pueden traducirse en más trabajo del GC.
+
+Ejemplos de potencial presión de memoria:
+
+\begin{itemize}
+  \item Leer cuerpos HTTP completos en memoria cuando podrían procesarse como stream.
+  \item Crear nuevos buffers para cada transformación JSON.
+  \item Copiar slices y strings innecesariamente.
+  \item Mantener respuestas grandes en caché sin límites de tamaño.
+\end{itemize}
+
+% ============================================================
+\section{Primitivas de concurrencia y modelo de memoria}
+% ============================================================
+
+\subsection{Channels}
+
+Los channels permiten pasar ownership o coordinar trabajo entre goroutines. Un channel sin buffer sincroniza emisor y receptor; un channel con buffer desacopla parcialmente ambos lados.
+
+\begin{lstlisting}[language=Go,caption={Canal con buffer para una cola de trabajos limitada}]
+type Job struct {
+    RequestID string
+    Payload   []byte
+}
+
+jobs := make(chan Job, 256)
+\end{lstlisting}
+
+El tamaño 256 no es un detalle cosmético: define cuánto trabajo puede acumularse antes de que el productor quede bloqueado o deba aplicar una política de rechazo.
+
+\subsection{Mutex, RWMutex y atomics}
+
+Un \code{sync.Mutex} garantiza exclusión mutua. Un \code{sync.RWMutex} permite múltiples lectores simultáneos y un único escritor, pero introduce mayor complejidad interna. Solo compensa cuando las lecturas dominan ampliamente y las secciones críticas no son tan pequeñas que el overhead del RWMutex supere el beneficio.
+
+Los atomics son adecuados para estados simples como contadores o índices round-robin. No sustituyen un lock cuando existen invariantes sobre múltiples variables.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{>{\bfseries}p{2.8cm} X X}
+\toprule
+Primitiva & Úsala cuando & Evítala cuando \\
+\midrule
+Channel & Hay flujo de trabajo, ownership o señalización entre goroutines & Solo necesitas proteger una pequeña estructura compartida \\
+Mutex & Hay invariantes sobre uno o varios campos & Solo quieres incrementar un contador independiente \\
+RWMutex & Lecturas muy frecuentes, escrituras escasas y mediciones demuestran beneficio & La sección crítica es diminuta o las escrituras son frecuentes \\
+Atomic & Estado escalar y operación indivisible & Debes mantener coherencia entre varios campos \\
+WaitGroup & Necesitas esperar la finalización de un conjunto conocido de goroutines & Necesitas cancelar o propagar errores por sí solo \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Race conditions, data races y happens-before}
+
+Una \textbf{data race} ocurre cuando dos goroutines acceden concurrentemente a la misma ubicación de memoria, al menos una escritura, sin sincronización suficiente. Una \textbf{race condition} es más general: el resultado lógico depende del orden de eventos, aunque no exista una data race detectable.
+
+Ejemplo: dos requests consultan la caché al mismo tiempo, ambas observan un miss y ambas llaman a OpenAI. El código puede estar libre de data races, pero existe una condición de carrera a nivel de comportamiento: se duplica una operación costosa.
+
+La solución conceptual puede ser \emph{singleflight} o deduplicación de requests en vuelo.
+
+% ============================================================
+\section{Worker pools, bounded concurrency y backpressure}
+% ============================================================
+
+\subsection{Por qué no basta con crear goroutines}
+
+Supongamos que el gateway recibe 10.000 requests/s, pero los proveedores pueden completar 500 requests/s de forma sostenible. Si aceptamos trabajo ilimitado, la cola efectiva se desplaza a memoria y el tiempo de espera crece sin límite.
+
+\begin{center}
+\begin{tikzpicture}[node distance=11mm and 14mm]
+  \node[box] (in) {10.000 req/s};
+  \node[box, right=of in] (queue) {Cola limitada\\N elementos};
+  \node[box, right=of queue] (pool) {Worker Pool\\M workers};
+  \node[box, right=of pool] (llm) {LLM\\500 req/s};
+  \node[smallbox, below=of queue] (reject) {429 / 503\\Load shedding};
+
+  \draw[arrow] (in) -- (queue);
+  \draw[arrow] (queue) -- (pool);
+  \draw[arrow] (pool) -- (llm);
+  \draw[arrow] (queue) -- node[right]{cola llena} (reject);
+\end{tikzpicture}
+\end{center}
+
+\subsection{Bounded concurrency}
+
+Limitar concurrencia significa establecer un máximo explícito de trabajo simultáneo. Puede implementarse mediante:
+
+\begin{itemize}
+  \item Worker pool fijo.
+  \item Semáforo mediante channel buffered.
+  \item Límite por proveedor.
+  \item Límite por clase de request o modelo.
+\end{itemize}
+
+\subsection{Backpressure}
+
+La backpressure es la forma en que un componente lento comunica indirectamente a los productores que no puede absorber más trabajo al mismo ritmo.
+
+Opciones comunes:
+
+\begin{enumerate}
+  \item Bloquear temporalmente al productor.
+  \item Mantener una cola limitada.
+  \item Rechazar nuevas requests.
+  \item Degradar funcionalidad.
+  \item Redirigir a otro backend.
+\end{enumerate}
+
+Una cola ilimitada no elimina el problema: lo convierte en consumo creciente de memoria y latencia de cola.
+
+\subsection{CPU-bound frente a I/O-bound}
+
+Para tareas CPU-bound, un pool del orden del número de cores puede ser razonable. Para tareas I/O-bound, el número óptimo puede ser mucho mayor porque muchas goroutines están bloqueadas esperando.
+
+En nuestro gateway, el pool no debe calcularse únicamente con \code{runtime.NumCPU()}. Debe basarse en restricciones externas: conexiones permitidas, cuotas del proveedor, latencia promedio, memoria y RPS objetivo.
+
+% ============================================================
+\section{Context, cancelación y deadlines}
+% ============================================================
+
+\code{context.Context} es una pieza central en servidores Go. Permite propagar cancelación, deadline y metadatos de request.
+
+\begin{lstlisting}[language=Go,caption={Propagación de timeout hacia el proveedor}]
+func callProvider(ctx context.Context, client *http.Client, url string) error {
+    ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+    defer cancel()
+
+    req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+    if err != nil {
+        return err
+    }
+
+    resp, err := client.Do(req)
+    if err != nil {
+        return err
+    }
+    defer resp.Body.Close()
+
+    return nil
+}
+\end{lstlisting}
+
+Si el cliente abandona la conexión, el contexto de la request puede cancelarse. Esa cancelación debe llegar hasta la llamada upstream para evitar seguir consumiendo GPU, tokens, sockets y memoria para una respuesta que nadie recibirá.
+
+\begin{conceptbox}{Regla práctica}
+Todo trabajo derivado de una request debería, salvo excepción justificada, estar ligado al contexto de esa request.
+\end{conceptbox}
+
+% ============================================================
+\section{Servidor HTTP y networking}
+% ============================================================
+
+\subsection{Ciclo request/response}
+
+En \code{net/http}, el servidor acepta conexiones, parsea requests y ejecuta un handler. El runtime y el paquete de red cooperan con el poller del sistema operativo para evitar dedicar un thread bloqueado a cada socket.
+
+En Linux suele apoyarse en \code{epoll}; en macOS, en \code{kqueue}. La consecuencia práctica es que Go puede mantener un gran número de conexiones concurrentes sin crear un thread por conexión.
+
+\subsection{Timeouts críticos}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{>{\bfseries}p{3.4cm} X}
+\toprule
+Timeout & Qué protege \\
+\midrule
+ReadHeaderTimeout & Clientes que envían headers extremadamente despacio \\
+ReadTimeout & Lecturas de request excesivamente lentas \\
+WriteTimeout & Respuestas que bloquean demasiado tiempo \\
+IdleTimeout & Conexiones keep-alive inactivas \\
+Upstream timeout & Proveedor LLM que no responde \\
+Overall deadline & Tiempo total máximo de una operación \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Cliente HTTP y connection pooling}
+
+Crear un \code{http.Client} nuevo por request impide aprovechar correctamente el pool de conexiones subyacente y puede aumentar DNS, TCP y TLS handshakes.
+
+El gateway debe reutilizar clientes y configurar \code{http.Transport} con límites apropiados por host.
+
+\begin{lstlisting}[language=Go,caption={Cliente HTTP reutilizable}]
+transport := &http.Transport{
+    MaxIdleConns:        200,
+    MaxIdleConnsPerHost: 100,
+    IdleConnTimeout:     90 * time.Second,
+}
+
+client := &http.Client{
+    Transport: transport,
+    Timeout:   15 * time.Second,
+}
+\end{lstlisting}
+
+% ============================================================
+\section{Rate limiting desde cero}
+% ============================================================
+
+\subsection{Rate limiting vs concurrency limiting}
+
+No son equivalentes:
+
+\begin{itemize}
+  \item \textbf{Rate limit:} limita cuántas operaciones se permiten por unidad de tiempo.
+  \item \textbf{Concurrency limit:} limita cuántas operaciones pueden estar en vuelo simultáneamente.
+\end{itemize}
+
+Un cliente podría respetar 10 req/s pero mantener muchas requests simultáneas si cada una tarda 30 s.
+
+\subsection{Token Bucket}
+
+El estado mínimo del algoritmo es:
+
+\[
+\{\text{tokens},\ \text{capacity},\ \text{refillRate},\ \text{lastRefill}\}
+\]
+
+A cada request se le exige un número de tokens. Los tokens se regeneran con el tiempo hasta alcanzar la capacidad máxima.
+
+\begin{lstlisting}[language=Go,caption={Esqueleto de Token Bucket concurrente}]
+type TokenBucket struct {
+    mu         sync.Mutex
+    capacity   float64
+    tokens     float64
+    refillRate float64
+    lastRefill time.Time
+}
+
+func (b *TokenBucket) Allow(now time.Time) bool {
+    b.mu.Lock()
+    defer b.mu.Unlock()
+
+    elapsed := now.Sub(b.lastRefill).Seconds()
+    b.tokens = math.Min(
+        b.capacity,
+        b.tokens+elapsed*b.refillRate,
+    )
+    b.lastRefill = now
+
+    if b.tokens < 1 {
+        return false
+    }
+
+    b.tokens--
+    return true
+}
+\end{lstlisting}
+
+\subsection{Refill lazy frente a ticker}
+
+Un refill mediante ticker por cliente es una mala arquitectura a gran escala: 100.000 clientes podrían implicar 100.000 timers/goroutines. El refill lazy calcula tokens acumulados únicamente cuando llega una request.
+
+\subsection{Claves del limiter}
+
+El rate limiting puede aplicarse por:
+
+\begin{itemize}
+  \item API key.
+  \item Usuario.
+  \item IP.
+  \item Modelo.
+  \item Proveedor.
+  \item Combinación de dimensiones.
+\end{itemize}
+
+El mapa de buckets debe tener política de limpieza para evitar crecimiento ilimitado de entradas inactivas.
+
+% ============================================================
+\section{Cache In-Memory y LRU concurrente}
+% ============================================================
+
+\subsection{Por qué una LRU usa mapa + lista doble}
+
+La LRU clásica combina:
+
+\begin{itemize}
+  \item Hash map: localización O(1) de una clave.
+  \item Lista doblemente enlazada: promoción y expulsión O(1).
+\end{itemize}
+
+\begin{center}
+\shorthandoff{<>}
+\begin{tikzpicture}[
+  node distance=9mm and 13mm,
+  maplink/.style={->, >=Latex, line width=.65pt, draw=blue!55!black, dashed},
+  nextlink/.style={->, >=Latex, line width=.85pt, draw=black!78, shorten <=2pt, shorten >=2pt},
+  prevlink/.style={->, >=Latex, line width=.70pt, draw=black!58, shorten <=2pt, shorten >=2pt}
+]
+  % The hash map stores key -> node references. It is deliberately placed
+  % above the linked list so lookup arrows never collide with list pointers.
+  \node[datastore] (map) at (5.4,1.65) {Hash Map\\key $\rightarrow$ node};
+
+  \node[smallbox] (a) at (1.7,0) {A\\MRU};
+  \node[smallbox] (b) at (4.15,0) {B};
+  \node[smallbox] (c) at (6.60,0) {C};
+  \node[smallbox] (d) at (9.05,0) {D\\LRU};
+
+  % O(1) lookup: entries in the map reference list nodes directly.
+  \draw[maplink] (map.south west) to[out=225,in=90] (a.north);
+  \draw[maplink] (map.south)      to[out=250,in=90] (b.north);
+  \draw[maplink] (map.south)      to[out=290,in=90] (c.north);
+  \draw[maplink] (map.south east) to[out=315,in=90] (d.north);
+
+  % Doubly-linked list. Forward pointers are drawn above the centre line;
+  % reverse pointers below it, avoiding overlapping arrowheads.
+  \draw[nextlink] ([yshift=2pt]a.east) -- ([yshift=2pt]b.west);
+  \draw[nextlink] ([yshift=2pt]b.east) -- ([yshift=2pt]c.west);
+  \draw[nextlink] ([yshift=2pt]c.east) -- ([yshift=2pt]d.west);
+
+  \draw[prevlink] ([yshift=-2pt]b.west) -- ([yshift=-2pt]a.east);
+  \draw[prevlink] ([yshift=-2pt]c.west) -- ([yshift=-2pt]b.east);
+  \draw[prevlink] ([yshift=-2pt]d.west) -- ([yshift=-2pt]c.east);
+
+  \node[font=\scriptsize, text=black!65] at (5.38,-.78)
+        {lista doble: promoción a MRU y expulsión desde LRU en $O(1)$};
+\end{tikzpicture}
+\shorthandon{<>}
+\end{center}
+
+\subsection{Concurrencia y locks}
+
+Aunque conceptualmente un \code{Get} parece una lectura, en una LRU tradicional también modifica la lista al promover el nodo a MRU. Por ello, un \code{RWMutex} no permite trivialmente que todos los Gets sean lectores puros.
+
+Este detalle es importante: elegir \code{RWMutex} porque ``hay muchas lecturas'' puede ser incorrecto si dichas lecturas también actualizan metadatos.
+
+\subsection{TTL y tamaño}
+
+La capacidad no debería definirse solo por número de entradas. Una respuesta LLM puede variar entre unos bytes y varios megabytes. Una implementación robusta puede limitar:
+
+\begin{itemize}
+  \item número de entradas;
+  \item bytes totales;
+  \item TTL por entrada;
+  \item tamaño máximo de una única respuesta cacheable.
+\end{itemize}
+
+\subsection{Cache key para LLM}
+
+Una clave correcta debe representar todos los parámetros que afectan semánticamente a la respuesta. Por ejemplo:
+
+\begin{lstlisting}[language=Go,caption={Modelo conceptual de clave de caché}]
+type CacheKeyInput struct {
+    Provider    string
+    Model       string
+    Prompt      string
+    System      string
+    Temperature float64
+    TopP        float64
+    ToolsHash   string
+}
+\end{lstlisting}
+
+Si omitimos \code{Temperature} o \code{System}, dos requests diferentes podrían colisionar lógicamente y devolver una respuesta incorrecta.
+
+\subsection{Singleflight y cache stampede}
+
+Escenario:
+
+\begin{verbatim}
+Request A -> cache miss -> llama a OpenAI
+Request B -> cache miss -> llama a OpenAI
+Request C -> cache miss -> llama a OpenAI
+\end{verbatim}
+
+Si las tres requests son equivalentes, estamos pagando tres veces. La deduplicación de requests en vuelo permite que B y C esperen el resultado iniciado por A.
+
+% ============================================================
+\section{Routing, load balancing y health checking}
+% ============================================================
+
+\subsection{Round Robin}
+
+Para una lista de N backends, un contador atómico puede seleccionar:
+
+\[
+index = counter \bmod N
+\]
+
+\begin{lstlisting}[language=Go,caption={Índice Round Robin con atomic}]
+func nextIndex(counter *atomic.Uint64, n int) int {
+    value := counter.Add(1)
+    return int((value - 1) % uint64(n))
+}
+\end{lstlisting}
+
+La dificultad real empieza cuando la lista cambia dinámicamente o cuando algunos backends están degradados.
+
+\subsection{Algoritmos comparados}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{>{\bfseries}p{3.4cm} X X}
+\toprule
+Algoritmo & Ventaja & Limitación \\
+\midrule
+Round Robin & Simple, barato y determinista & Ignora capacidad y latencia \\
+Weighted RR & Representa capacidades distintas & Requiere pesos correctos \\
+Random & Muy simple y sin estado global fuerte & Puede generar distribución desigual a corto plazo \\
+Least Connections & Útil si las requests duran tiempos muy distintos & Mantiene estado de conexiones activas \\
+Least Latency & Se adapta al rendimiento observado & Puede oscilar y requiere métricas estables \\
+Consistent Hashing & Afinidad por clave y menor redistribución & No balancea bien cargas muy sesgadas sin técnicas adicionales \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Health checks activos y pasivos}
+
+Un health checker activo realiza llamadas periódicas. Un check pasivo observa resultados reales de tráfico.
+
+La combinación suele ser más robusta:
+
+\begin{itemize}
+  \item Active: ``¿el backend responde ahora?''
+  \item Passive: ``¿las requests reales están fallando?''
+\end{itemize}
+
+Para evitar flapping, conviene requerir varios fallos consecutivos antes de marcar unhealthy y varias recuperaciones antes de devolverlo a healthy.
+
+% ============================================================
+\section{Failover, retries, circuit breaker y bulkheads}
+% ============================================================
+
+\subsection{Partial failure}
+
+En sistemas distribuidos, ``UP'' y ``DOWN'' son demasiado simplistas. Puede ocurrir:
+
+\begin{verbatim}
+Gateway     OK
+Ollama      OK
+OpenAI      DOWN
+DNS         intermitente
+Dashboard   OK
+Network     degradada
+\end{verbatim}
+
+El gateway debe seguir ofreciendo el máximo servicio posible sin ocultar degradaciones relevantes.
+
+\subsection{Retries}
+
+No todos los errores deben reintentarse. Un 400 por payload inválido no se resuelve repitiendo. Un timeout transitorio sí podría hacerlo.
+
+Una política típica combina exponential backoff y jitter:
+
+\[
+wait_n = min(maxDelay, base \cdot 2^n) + jitter
+\]
+
+El jitter reduce la sincronización de muchos clientes que reintentan al mismo tiempo.
+
+\subsection{Circuit Breaker}
+
+Estados clásicos:
+
+\begin{center}
+\begin{tikzpicture}[node distance=30mm]
+  \node[box] (closed) {CLOSED\\tráfico normal};
+  \node[box, right=of closed] (open) {OPEN\\rechazo rápido};
+  \node[box, below=18mm of $(closed)!0.5!(open)$] (half) {HALF-OPEN\\pruebas limitadas};
+
+  \draw[arrow] (closed) -- node[above]{fallos $>$ umbral} (open);
+  \draw[arrow] (open) -- node[right]{cooldown} (half);
+  \draw[arrow] (half) -- node[below left]{éxito} (closed);
+  \draw[arrow] (half) -- node[below right]{fallo} (open);
+\end{tikzpicture}
+\end{center}
+
+El health checker detecta estado; el circuit breaker protege el camino de ejecución evitando insistir sobre un backend ya conocido como problemático.
+
+\subsection{Bulkheads}
+
+El patrón bulkhead separa recursos para evitar que un fallo consuma toda la capacidad disponible. Por ejemplo:
+
+\begin{itemize}
+  \item Pool de concurrencia para Ollama.
+  \item Pool independiente para OpenAI.
+  \item Límites separados por modelo.
+\end{itemize}
+
+Si OpenAI se degrada, sus requests no deberían ocupar todos los slots y bloquear también el tráfico que podría resolverse localmente.
+
+% ============================================================
+\section{Streaming, SSE y WebSockets}
+% ============================================================
+
+\subsection{Streaming de respuestas LLM}
+
+En streaming, la latencia percibida depende especialmente de TTFT (Time To First Token), no solo de la latencia total.
+
+Métricas útiles:
+
+\begin{itemize}
+  \item TTFT.
+  \item Tokens por segundo.
+  \item Tiempo total.
+  \item Bytes enviados.
+  \item Abandono del cliente.
+\end{itemize}
+
+\subsection{SSE vs WebSocket}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{>{\bfseries}p{3cm} X X}
+\toprule
+Aspecto & SSE & WebSocket \\
+\midrule
+Dirección & Servidor $\rightarrow$ cliente & Bidireccional \\
+Protocolo base & HTTP & Upgrade desde HTTP \\
+Reconexión & Nativa/simple & Debe implementarse \\
+Complejidad & Baja & Mayor \\
+Ideal para & Métricas, eventos, logs & Control interactivo en tiempo real \\
+Backpressure & Requiere política por consumidor & También requiere política explícita \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Para el dashboard inicial, SSE suele ser suficiente porque el flujo principal es backend $\rightarrow$ frontend. WebSocket cobra sentido si el dashboard necesita comandos interactivos persistentes o comunicación bidireccional intensiva.
+
+% ============================================================
+\section{Pub/Sub interno y slow consumers}
+% ============================================================
+
+No queremos que la request principal se bloquee porque el dashboard sea lento.
+
+Una arquitectura razonable es:
+
+\begin{center}
+\begin{tikzpicture}[node distance=10mm and 14mm]
+  \node[box] (request) {Request path};
+  \node[box, right=of request] (bus) {Metrics Bus};
+  \node[smallbox, above right=8mm and 12mm of bus] (s1) {SSE client 1};
+  \node[smallbox, right=of bus] (s2) {Aggregator};
+  \node[smallbox, below right=8mm and 12mm of bus] (s3) {Logger};
+
+  \draw[arrow] (request) -- (bus);
+  \draw[arrow] (bus) -- (s1);
+  \draw[arrow] (bus) -- (s2);
+  \draw[arrow] (bus) -- (s3);
+\end{tikzpicture}
+\end{center}
+
+Si un consumidor se retrasa, debemos decidir entre bloquear, acumular, desconectar o descartar eventos. Para telemetría en vivo, descartar muestras antiguas suele ser mejor que bloquear el hot path.
+
+% ============================================================
+\section{Métricas y observabilidad}
+% ============================================================
+
+\subsection{Tipos de métricas}
+
+\begin{itemize}
+  \item \textbf{Counter:} requests totales, errores, cache hits.
+  \item \textbf{Gauge:} requests activas, tamaño de cola, workers ocupados.
+  \item \textbf{Histogram:} distribución de latencias o tamaños.
+\end{itemize}
+
+\subsection{Percentiles y tail latency}
+
+Una media puede ocultar degradaciones severas. Considérese:
+
+\[
+P50 = 90\text{ ms},\quad P95 = 210\text{ ms},\quad P99 = 4.2\text{ s}
+\]
+
+El sistema parece rápido para la mayoría, pero 1 de cada 100 requests puede experimentar una latencia muy alta. En un gateway, esa cola larga puede venir de locks, GC, colas saturadas, conexiones nuevas, throttling del proveedor o retries.
+
+\subsection{Métricas del gateway}
+
+\begin{longtable}{>{\bfseries}p{4cm} p{10.5cm}}
+\toprule
+Métrica & Interpretación \\
+\midrule
+Requests/s & Throughput de entrada y completado \\
+Inflight requests & Trabajo simultáneo actual \\
+Queue depth & Presión acumulada antes de procesamiento \\
+P50/P95/P99 latency & Calidad de servicio y tail latency \\
+Cache hit ratio & Efectividad de caché \\
+Rate-limit rejects & Tráfico rechazado por política \\
+Load-shed rejects & Tráfico rechazado por saturación \\
+Provider latency & Latencia atribuible a cada backend \\
+TTFT & Tiempo hasta el primer token \\
+Tokens/s & Velocidad de generación \\
+Failover count & Frecuencia de conmutaciones \\
+Retry count & Presión extra causada por fallos transitorios \\
+Estimated cost & Coste aproximado de proveedores externos \\
+Estimated savings & Ahorro por caché o ejecución local \\
+Health status & Estado de cada backend \\
+\bottomrule
+\end{longtable}
+
+\subsection{Logs, métricas y traces}
+
+No son intercambiables:
+
+\begin{itemize}
+  \item Métricas responden ``¿está ocurriendo un patrón?''.
+  \item Logs responden ``¿qué ocurrió en este evento concreto?''.
+  \item Traces responden ``¿dónde se fue el tiempo a través de varios componentes?''.
+\end{itemize}
+
+Un \code{requestID} o correlation ID debe acompañar el flujo completo sin registrar prompts sensibles por defecto.
+
+% ============================================================
+\section{Memoria, GC y optimización}
+% ============================================================
+
+\subsection{Hot path}
+
+El hot path del gateway puede representarse como:
+
+\begin{verbatim}
+HTTP parse
+ -> auth / rate limit
+ -> cache lookup
+ -> admission control
+ -> provider routing
+ -> upstream call
+ -> response / streaming
+ -> metrics
+\end{verbatim}
+
+Cada asignación, lock o copia añadida aquí tiene potencial de multiplicarse por miles de requests.
+
+\subsection{sync.Pool}
+
+\code{sync.Pool} puede reutilizar objetos temporales como buffers, pero no debe usarse como caché semántica: el runtime puede vaciar el pool en cualquier momento.
+
+\subsection{False sharing}
+
+Dos contadores independientes pueden residir en la misma línea de caché de CPU. Si cores distintos escriben frecuentemente en ambos, el protocolo de coherencia puede provocar tráfico innecesario. Este fenómeno se denomina false sharing.
+
+Es un tema de optimización avanzada y debe medirse antes de introducir padding manual.
+
+\subsection{Profiling}
+
+Herramientas relevantes:
+
+\begin{itemize}
+  \item \code{go test -bench=. -benchmem}
+  \item CPU profile
+  \item Heap profile
+  \item Mutex profile
+  \item Block profile
+  \item Goroutine profile
+  \item \code{pprof}
+\end{itemize}
+
+\begin{conceptbox}{Regla de rendimiento}
+No optimizar una estructura porque ``parece lenta''. Primero identificar el cuello de botella con benchmark o profile, cambiar una variable, y volver a medir.
+\end{conceptbox}
+
+% ============================================================
+\section{Little's Law, throughput y saturación}
+% ============================================================
+
+Little's Law relaciona número promedio de elementos en el sistema $L$, tasa de llegada $\lambda$ y tiempo promedio $W$:
+
+\[
+L = \lambda W
+\]
+
+Si el gateway procesa 500 req/s y cada request permanece 2 s en el sistema, hay aproximadamente:
+
+\[
+L = 500 \times 2 = 1000
+\]
+
+requests en vuelo en promedio.
+
+Esto explica por qué latencia y concurrencia están íntimamente ligadas. Si el proveedor se ralentiza de 2 s a 10 s manteniendo la misma llegada, el sistema necesitaría soportar aproximadamente 5.000 requests en vuelo para no rechazar tráfico, con el consiguiente aumento de memoria, sockets y presión interna.
+
+% ============================================================
+\section{Seguridad y límites defensivos}
+% ============================================================
+
+Un gateway expuesto debe asumir inputs maliciosos o simplemente incorrectos.
+
+Controles mínimos:
+
+\begin{itemize}
+  \item Tamaño máximo de body.
+  \item Validación estricta de JSON.
+  \item API keys y secretos fuera del repositorio.
+  \item TLS en despliegue real.
+  \item No loggear Authorization headers.
+  \item No loggear prompts completos por defecto.
+  \item CORS explícito.
+  \item Timeouts en servidor y upstream.
+  \item Límites de concurrencia y rate limiting.
+  \item Sanitización de logs enviados al dashboard.
+\end{itemize}
+
+% ============================================================
+\section{Frontend React y dashboard en tiempo real}
+% ============================================================
+
+El dashboard no debería ser un simple ejercicio visual; debe actuar como consola operativa.
+
+\subsection{Paneles recomendados}
+
+\begin{itemize}
+  \item RPS actual y histórico.
+  \item P50/P95/P99.
+  \item Cache hit ratio.
+  \item Coste estimado y ahorro acumulado.
+  \item Estado de cada backend.
+  \item Requests activas y profundidad de cola.
+  \item Failovers y retries.
+  \item TTFT y tokens/s.
+  \item Live logs con filtros por nivel, proveedor y request ID.
+\end{itemize}
+
+\subsection{Evitar re-renders excesivos}
+
+Si recibimos 1.000 eventos/s, no debemos forzar 1.000 renders/s. El frontend puede:
+
+\begin{itemize}
+  \item Agregar muestras en ventanas temporales.
+  \item Mantener ring buffers.
+  \item Actualizar charts a intervalos de 250--1000 ms.
+  \item Separar estado crudo de estado derivado.
+  \item Memoizar componentes donde tenga sentido.
+\end{itemize}
+
+% ============================================================
+\section{Estructura recomendada del monorepo}
+% ============================================================
+
+\begin{verbatim}
+ai-optimized-gateway-proxy/
+|-- backend/
+|   |-- cmd/
+|   |   `-- gateway/
+|   |       `-- main.go
+|   |-- internal/
+|   |   |-- httpapi/
+|   |   |-- middleware/
+|   |   |-- admission/
+|   |   |-- ratelimit/
+|   |   |-- cache/
+|   |   |-- provider/
+|   |   |   |-- openai/
+|   |   |   `-- ollama/
+|   |   |-- routing/
+|   |   |-- health/
+|   |   |-- resilience/
+|   |   |-- metrics/
+|   |   |-- realtime/
+|   |   `-- config/
+|   |-- pkg/
+|   |-- tests/
+|   |-- go.mod
+|   `-- go.sum
+|-- frontend/
+|   |-- src/
+|   |   |-- components/
+|   |   |-- features/
+|   |   |-- hooks/
+|   |   |-- services/
+|   |   |-- types/
+|   |   `-- pages/
+|   |-- package.json
+|   `-- tsconfig.json
+|-- deploy/
+|   |-- docker/
+|   `-- compose/
+|-- docs/
+|   |-- architecture/
+|   |-- adr/
+|   `-- benchmarks/
+|-- scripts/
+|-- .github/
+|   `-- workflows/
+|-- Makefile
+`-- README.md
+\end{verbatim}
+
+\subsection{Por qué esta estructura}
+
+\code{cmd/gateway} contiene el composition root: crea dependencias y arranca el proceso. La lógica de negocio se concentra en \code{internal}, evitando que otros módulos externos importen accidentalmente detalles internos.
+
+Los paquetes deben nacer de responsabilidades reales, no de patrones abstractos. En Go, introducir una interface antes de existir dos implementaciones o una necesidad clara de sustitución puede ser sobreingeniería.
+
+% ============================================================
+\section{Flujo completo de una request}
+% ============================================================
+
+Una request típica podría recorrer:
+
+\begin{center}
+\begin{tikzpicture}[node distance=8mm]
+  \node[box] (a) {1. HTTP Request};
+  \node[box, below=of a] (b) {2. Validate + Auth};
+  \node[box, below=of b] (c) {3. Rate Limit};
+  \node[box, below=of c] (d) {4. Cache Lookup};
+  \node[box, below=of d] (e) {5. Admission / Pool};
+  \node[box, below=of e] (f) {6. Router};
+  \node[box, below=of f] (g) {7. Provider Call};
+  \node[box, below=of g] (h) {8. Cache Store};
+  \node[box, below=of h] (i) {9. Metrics + Response};
+
+  \draw[arrow] (a) -- (b);
+  \draw[arrow] (b) -- (c);
+  \draw[arrow] (c) -- (d);
+  \draw[arrow] (d) -- (e);
+  \draw[arrow] (e) -- (f);
+  \draw[arrow] (f) -- (g);
+  \draw[arrow] (g) -- (h);
+  \draw[arrow] (h) -- (i);
+\end{tikzpicture}
+\end{center}
+
+Este orden puede cambiar por decisiones de producto. Por ejemplo, consultar caché antes del rate limiter puede permitir hits baratos incluso cuando el proveedor está saturado, pero también puede crear una vía para eludir una política de cuota si el contrato exige contabilizar todas las requests. Esta es una decisión de diseño, no una verdad universal.
+
+% ============================================================
+\section{Ejemplo práctico integrado}
+% ============================================================
+
+Supongamos una configuración:
+
+\begin{itemize}
+  \item Ollama local: 20 requests concurrentes sostenibles.
+  \item OpenAI: 100 req/s de cuota.
+  \item Cache LRU: 1 GB máximo, TTL 15 min.
+  \item Worker/admission queue: 500 elementos.
+  \item Rate limit por API key: 10 req/s, burst 20.
+\end{itemize}
+
+Llega una request:
+
+\begin{enumerate}
+  \item El servidor valida body y autenticación.
+  \item Token Bucket concede un token.
+  \item Se calcula la cache key incluyendo modelo y parámetros de generación.
+  \item Hay miss.
+  \item Se consulta singleflight: nadie está procesando esa clave.
+  \item Admission control reserva capacidad.
+  \item Router selecciona Ollama porque está healthy y tiene capacidad.
+  \item El contexto impone un deadline de 8 s.
+  \item Ollama falla por conexión.
+  \item Health/passive checker registra fallo.
+  \item La política determina que es retryable.
+  \item Se intenta OpenAI, respetando su propio concurrency limit.
+  \item OpenAI responde correctamente.
+  \item Se guarda la respuesta si cumple política de caché.
+  \item Se liberan recursos del admission control.
+  \item Se emiten métricas: latency, provider, failover=1, tokens, cost, cache miss.
+  \item El dashboard recibe un evento agregado.
+\end{enumerate}
+
+La clave está en que cada componente protege una dimensión distinta del sistema. Rate limiting no sustituye admission control; health checking no sustituye circuit breaking; caching no sustituye singleflight; retries sin deadlines pueden empeorar una caída.
+
+% ============================================================
+\section{Testing y verificación de corrección}
+% ============================================================
+
+\subsection{Unit tests}
+
+Ejemplos prioritarios:
+
+\begin{itemize}
+  \item Token bucket con reloj controlable.
+  \item LRU: promoción, eviction y TTL.
+  \item Round Robin con backends healthy/unhealthy.
+  \item Circuit breaker y transiciones de estado.
+  \item Policy de retry por tipo de error.
+\end{itemize}
+
+\subsection{Race detector}
+
+\begin{verbatim}
+go test -race ./...
+\end{verbatim}
+
+Debe formar parte del CI. No demuestra ausencia de todos los bugs de concurrencia, pero detecta accesos de memoria sin sincronización durante las ejecuciones cubiertas.
+
+\subsection{Load testing}
+
+Un test útil incrementa progresivamente carga y observa el punto de saturación. Métricas a correlacionar:
+
+\begin{itemize}
+  \item RPS.
+  \item P95/P99.
+  \item queue depth.
+  \item heap.
+  \item número de goroutines.
+  \item CPU.
+  \item mutex/block profile.
+  \item errores y rechazos.
+\end{itemize}
+
+El objetivo no es únicamente encontrar el máximo RPS, sino comprender \textbf{cómo falla} el sistema cuando supera su capacidad.
+
+% ============================================================
+\section{CI/CD y despliegue}
+% ============================================================
+
+Pipeline recomendado:
+
+\begin{enumerate}
+  \item Format y lint.
+  \item Unit tests.
+  \item Race detector.
+  \item Integration tests.
+  \item Build backend/frontend.
+  \item Benchmarks de referencia en ramas controladas.
+  \item Docker build.
+  \item Security scan opcional.
+\end{enumerate}
+
+Para Docker, un multi-stage build permite compilar el binario Go en una etapa y copiar únicamente el ejecutable a una imagen final mínima.
+
+% ============================================================
+\section{Roadmap de aprendizaje por milestones}
+% ============================================================
+
+\begin{longtable}{>{\bfseries}p{2.2cm} p{5.2cm} p{7cm}}
+\toprule
+Milestone & Entregable & Conceptos principales \\
+\midrule
+M0 & Monorepo y servidor HTTP mínimo & net/http, config, graceful shutdown, estructura de paquetes \\
+M1 & Concurrencia controlada & goroutines, channels, worker pool, semáforos, context \\
+M2 & Token Bucket & mutex, tiempo monotónico, rate limiting, limpieza de estado \\
+M3 & Provider abstraction & interfaces, adapters, HTTP clients, OpenAI/Ollama \\
+M4 & Routing y health & atomics, Round Robin, health checks, failover \\
+M5 & Resiliencia & retries, backoff, jitter, circuit breaker, bulkheads \\
+M6 & Cache LRU & hashmap + lista doble, locks, TTL, memory limits \\
+M7 & Singleflight & in-flight deduplication, cache stampede \\
+M8 & Streaming & SSE upstream/downstream, TTFT, cancellation \\
+M9 & Telemetría & counters, gauges, histograms, pub/sub \\
+M10 & React dashboard & realtime state, charts, aggregation, reconnection \\
+M11 & Performance & benchmarks, pprof, allocation y lock profiling \\
+M12 & Production hardening & Docker, CI, race tests, load tests, docs de arquitectura \\
+\bottomrule
+\end{longtable}
+
+% ============================================================
+\section{Errores de diseño que el proyecto debe evitar}
+% ============================================================
+
+\begin{enumerate}
+  \item Cola de jobs ilimitada.
+  \item Crear un \code{http.Client} por request.
+  \item Un ticker/goroutine por bucket de rate limit.
+  \item Cache LRU sin límite de bytes.
+  \item Reintentar todos los errores.
+  \item Retries sin jitter.
+  \item Health checker que cambia estado con un único fallo.
+  \item Un mutex global protegiendo trabajo lento.
+  \item Emitir telemetría bloqueante en el hot path.
+  \item Ignorar cancelación del cliente.
+  \item Medir únicamente latencia media.
+  \item Optimizar antes de perfilar.
+  \item Introducir interfaces y capas sin necesidad concreta.
+\end{enumerate}
+
+% ============================================================
+\section{Criterios de calidad de nivel Mid/Senior}
+% ============================================================
+
+Un equipo técnico valorará más el razonamiento que la cantidad de features. El proyecto debería permitir explicar con precisión:
+
+\begin{itemize}
+  \item por qué existe cada límite de concurrencia;
+  \item cómo evita crecimiento ilimitado de memoria;
+  \item qué garantías de thread-safety ofrece cada estructura;
+  \item qué errores son retryable y por qué;
+  \item cómo se degrada ante caída parcial de proveedores;
+  \item cómo se evita que observabilidad bloquee producción;
+  \item cómo se mide el rendimiento real;
+  \item qué trade-offs se aceptaron conscientemente.
+\end{itemize}
+
+Documentar estas decisiones como ADRs (Architecture Decision Records) convertirá el repositorio en una demostración de criterio, no únicamente de implementación.
+
+% ============================================================
+\section{Conclusión}
+% ============================================================
+
+\project{} es un excelente vehículo para aprender ingeniería de sistemas porque fuerza a conectar conceptos que normalmente se estudian aislados. Goroutines, channels y mutexes solo adquieren sentido cuando se relacionan con colas, sockets, límites externos y fallos parciales. Un algoritmo LRU deja de ser un ejercicio académico cuando 20.000 requests compiten por el mismo lock. Un retry deja de ser una ``buena práctica'' cuando multiplica la carga durante una caída. Una media de latencia deja de ser útil cuando el P99 revela saturación.
+
+El diseño final debe perseguir cuatro propiedades:
+
+\begin{enumerate}
+  \item \textbf{Corrección:} ausencia de data races, invariantes claras y respuestas semánticamente correctas.
+  \item \textbf{Control:} límites explícitos de memoria, concurrencia, cola, tiempo y frecuencia.
+  \item \textbf{Resiliencia:} degradación controlada ante fallos parciales, timeouts y proveedores lentos.
+  \item \textbf{Observabilidad:} capacidad de explicar qué ocurre internamente mediante métricas, logs, traces y profiling.
+\end{enumerate}
+
+La implementación debe avanzar por milestones pequeños. El primer paso técnico recomendado es construir un servidor HTTP nativo mínimo con configuración y graceful shutdown, medir su comportamiento y, a partir de ahí, introducir bounded concurrency. Este orden permite que cada nueva abstracción aparezca como respuesta a un problema observable, que es precisamente la forma más sólida de desarrollar criterio de ingeniería.
+
+\end{document}
